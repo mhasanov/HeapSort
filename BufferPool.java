@@ -7,279 +7,244 @@ import java.io.RandomAccessFile;
 import java.util.LinkedList;
 
 /**
- * Contains a pool of buffers that can store byte data from a binary file.
- * When requests for data that isn't stored in a buffer is made, the pool will
- * pull a block of data from the file into an empty buffer, or overrite the data
- * in the least recently used buffer (writing it's contents to the file if
- * they've been changed).
- *  @author Joshua Rush (jdrush89)
- *  @author Benjamin Roble (broble)
- *  @version Nov 2, 2011
+ * 
  */
 public class BufferPool
 {
-    //A linked list containing the buffers in this pool
-    private LinkedList<BufferNode> bufferList;
-    //the number of buffers this pool can hold at maximum
-    private int numBuffers;
-    //the binary file that the bufferpool interfaces with
-    private RandomAccessFile myFile;
+    // TODO use custom LinkedList
+    private LinkedList<BufferNode> bufferLL;
+    
+    
+    
+    
+    
+    
+    private int numberOfBuffers;
+    private RandomAccessFile file;
+    private int hits = 0;
+    private int misses = 0;
+    private int reads = 0;
+    private int writes = 0;
 
-    //number of cache hits
-    private int cacheHits = 0;
-
-    //number of cache misses
-    private int cacheMisses = 0;
-
-     //number of disk reads
-    private int diskReads = 0;
-
-     //number of disk writes
-    private int diskWrites = 0;
 
     /**
-     * A constant for the number of bytes a buffer can hold
+     * 
      */
-    public static final int BUFFER_SIZE = 4096;
+    public int getMisses() {
+        return misses;
+    }
     /**
-     * Create a new BufferPool with the specified number of buffers.
-     * @param pNumBuffs the number of buffers this BufferPool can hold
-     * @param pFile the binary file this BufferPool interfaces with
+     * 
      */
-    public BufferPool(int pNumBuffs, File pFile)
+    public int getHits() {
+        return hits;
+    }
+    /**
+     * 
+     */
+    public int getReads() {
+        return reads;
+    }
+    /**
+     * 
+     */
+    public int getWrites() {
+        return writes;
+    }
+    
+    
+    /**
+     * 
+     */
+    public static final int bSize = 4096;
+    /**
+     * @throws FileNotFoundException 
+     * 
+     */
+    public BufferPool(int numberOfBuffers, File file) throws FileNotFoundException
     {
-        bufferList = new LinkedList<BufferNode>();
-        numBuffers = pNumBuffs;
-        try
-        {
-            myFile = new RandomAccessFile(pFile, "rw");
-        }
-        catch (FileNotFoundException e)
-        {
-            System.out.println("COULD NOT FIND THE FILE.");
-            e.printStackTrace();
-        }
-
+        this.numberOfBuffers = numberOfBuffers;
+        this.file = new RandomAccessFile(file, "rw");
+        bufferLL = new LinkedList<BufferNode>();
     }
 
-    // ----------------------------------------------------------
-    /**
-     * Return a a short key value from the record at the specified position.
-     * @param recNum the number of the record to get the key from
-     * @return the short that is thee key for the specified record
-     */
-    public short requestKey(long recNum) {
-        BufferNode bn = bufferContains(recNum);
-        if(bn == null) bn = bufferRead(recNum);
+    
 
-        return getKey(bn, recNum);
-    }
+    
+    
     /**
-     * Returns the node that contains the specified record.
-     * @param recNum the record number to search for
-     * @return the bufferNode the record is in, or null if it isn't found
+     * bufferContains = has
      */
-    private BufferNode bufferContains(long recNum) {
-        for(BufferNode bNode : bufferList) {
-            if(bNode.getBlockID() <= recNum*4 && bNode.getBlockID() + BUFFER_SIZE > recNum*4) {
-                cacheHits++;
-                return bNode;
+    private BufferNode has(long recordNumb) {
+        
+        for(BufferNode node : bufferLL) {
+            if(node.getInitialBuffPos() <= recordNumb*4) {
+                if(node.getInitialBuffPos() + bSize > recordNumb*4) {
+                    hits++;
+                    return node;
+                }
             }
         }
-        cacheMisses++;
+        misses++;
         return null;
     }
 
-    // ----------------------------------------------------------
+    
+    
+    
+    
     /**
-     * Get the key short value from a buffer
-     * @param pNode the BufferNode containing the key.
-     * @param recNum the record number to get the key from.
-     * recNum must be less than BUFFER_SIZE / 4
-     * @return the short value of the key
+     * 
      */
-    public short getKey(BufferNode pNode, long recNum)
+    public short getKey(BufferNode node, long recordNumber)
     {
-        //pos is the position in the buffer that contains the record, so
-        //will at most be 4095.
-        long pos = recNum * 4 - pNode.getBlockID();
-        return pNode.getBuffer().getShort((int)pos);
+        long pos = recordNumber * 4 - node.getInitialBuffPos();
+        return node.getCurrBuff().getShort((int)pos);
     }
+    
+    
+    
+    
     /**
-     * Read a block of data into a buffer.  If the buffer pool is full,
-     * overwrite the least recently used buffer, writing its contents if they've
-     * been changed.
-     * @param recNum the record number whose block is to be read
-     * @return the BufferNode containing the buffer that just read in the data.
+     * requestKey = getKey
+     * @throws IOException 
      */
-    private BufferNode bufferRead(long recNum) {
-        BufferNode currentNode;
-
-
-        // if our bufferPool is full, overwrite an existing buffer
-        if(bufferList.size() >= numBuffers) {
-            currentNode= bufferList.getLast();
-            //if a buffer was changed, we need to write it back to the file
-            //before overwriting the buffer
-            if(currentNode.isChanged())
-                writeToFile(currentNode);
-
-            bufferList.removeLast();
+    public short getKey(long recordNumb) throws IOException {
+        BufferNode node = has(recordNumb);
+        if(node == null) {
+            node = bufferRead(recordNumb);
         }
-        currentNode = new BufferNode();
-
-
-        long startReadingPosition = ((recNum * 4 )/ 4096); //truncate
-        startReadingPosition *= 4096;
-
-        currentNode.setBlockID(startReadingPosition);
-        //seek to and read the data
-        try
-        {
-            myFile.seek(startReadingPosition);
-            myFile.read(currentNode.getBuffer().getData());
-            diskReads++;
-        }
-        catch (IOException e)
-        {
-            System.out.println("Could not read file into buffer");
-            e.printStackTrace();
-        }
-
-        //move currentNode from the last position to the first position
-        //since the most recently changed node is always at the front
-        //of the linked list
-
-        bufferList.addFirst(currentNode);
-        bufferList.indexOf(currentNode);
-        return currentNode;
+        return getKey(node, recordNumb);
     }
+    
+    
     /**
-     * Write the data in the specified buffer to the file.
-     * @param writeNode the node containing the buffer to be written
+     * @throws IOException 
+     * 
      */
-    private void writeToFile(BufferNode writeNode) {
-        try
-        {
-            myFile.seek(writeNode.getBlockID());
-            myFile.write(writeNode.getBuffer().getData());
-            diskWrites++;
+    private BufferNode bufferRead(long recordNumber) throws IOException {
+        BufferNode node;
+
+        if(bufferLL.size() >= numberOfBuffers) {
+            node= bufferLL.getLast();
+            if(node.getBuffModified())
+                writeToFile(node);
+
+            bufferLL.removeLast();
         }
-        catch (IOException e)
-        {
-            System.out.println("Failed to write to file");
-            e.printStackTrace();
-        }
+        node = new BufferNode();
+
+
+        long startReadingPosition = recordNumber * 4;
+
+        node.setInitialBuffPos(startReadingPosition);
+        file.seek(startReadingPosition);
+        file.read(node.getCurrBuff().getmyBytes());
+        reads++;
+        bufferLL.addFirst(node);
+        bufferLL.indexOf(node);
+        return node;
     }
+    
+    
+
+    
+    
     /**
-     * Set the specified record to be the new byte data.
-     * the new data should be an array of 4 bytes.  If the record isn't already
-     * in a buffer, read it in.
-     * @param recordNum the record number to overwrite
-     * @param data the new byte data to set the record to
+     * setRecord = set
+     * @throws IOException 
      */
-    public void setRecord(long recordNum, byte[] data)
+    public void set(long recordNumber, byte[] data) throws IOException
     {
-        BufferNode node = bufferContains(recordNum);
-        if (node == null)
-            node = bufferRead(recordNum);
-        node.getBuffer().setRecord((int)(recordNum * 4 - node.getBlockID()), data);
-        node.setChanged(true);
+        BufferNode node = has(recordNumber);
+        if (node == null) {
+            node = bufferRead(recordNumber);
+        }
+        node.getCurrBuff().setNewerBytes((int)(recordNumber * 4 - node.getInitialBuffPos()), data);
+        node.setBuffModified(true);
     }
+    
+    
+    
     /**
-     * Return a byte array containing the specifed record.  If the record isn't
-     * already in a buffer pool, read it in.
-     * @param recordNum the number of the record to retrieve
-     * @return the byte array containing the record.
+     * @throws IOException 
+     * 
      */
-    public byte[] getRecord(long recordNum)
-    {
-        BufferNode node = bufferContains(recordNum);
-        if (node == null)
-            node = bufferRead(recordNum);
-        return node.getBuffer().getRecord((int)(recordNum * 4 - node.getBlockID()));
+    private void writeToFile(BufferNode node) throws IOException {
+        file.seek(node.getInitialBuffPos());
+        file.write(node.getCurrBuff().getmyBytes());
+        writes++;
     }
+    
+    
+    
     /**
-     * Write the contents of all buffers to the file.
+     * getRecord = get
+     * @throws IOException 
      */
-    public void flush()
+    public byte[] get(long recordNumber) throws IOException
     {
-        for(BufferNode bNode : bufferList) {
-            if(bNode.isChanged())
+        BufferNode node = has(recordNumber);
+        if (node == null) {
+            node = bufferRead(recordNumber);
+        }
+        return node.getCurrBuff().getDataRecords((int)(recordNumber * 4 - node.getInitialBuffPos()));
+    }
+    
+    
+    /**
+     * @throws IOException 
+     * 
+     */
+    public void flush() throws IOException
+    {
+        for(BufferNode bNode : bufferLL) {
+            if(bNode.getBuffModified())
             {
                 writeToFile(bNode);
-                bNode.setChanged(false);
+                bNode.setBuffModified(false);
             }
         }
     }
     /**
-     * Print out the first record from each block of BUFFER_SIZE.  Print the
-     * records 8 to a line, keys and values separated by spaces, and formatted
-     * into columns.
+     * @throws IOException 
+     * 
      */
-    public void print()
+    public void print() throws IOException
     {
-        try
+        int j = 0;
+        for(long i=0; i*4<file.length() - 4095; i+=1024)
         {
-            int count = 0;
-            for(long i=0; i*4<myFile.length() - 4095; i+=1024)
-            {
-                byte[] record = getRecord(i);
-                count++;
-                System.out.print(makeShort(record[0],record[1]) + "\t" +
-                    makeShort(record[2], record[3]) + "\t");
-                if(count%8 == 0)
-                    System.out.print("\n");
+            byte[] record = get(i);
+            j++;
+            System.out.print(makeShort(record[0],record[1])
+                + "\t" + makeShort(record[2], record[3]) + "\t");
+            if(j%8 == 0) {
+                System.out.print("\n");
             }
         }
-        catch (IOException e)
-        {
-            System.out.println("File Read Error");
-            e.printStackTrace();
-        }
     }
+    
+    
+    
+    
+    
+    
+    
     /**
-     * Return a short value from two bytes.
-     * @param one the first byte
-     * @param two the second byte
-     * @return the short value
+     * 
      */
-    public short makeShort(byte one, byte two)
+    public short makeShort(byte a, byte b)
     {
-        ByteBuffer bb = ByteBuffer.allocate(2);
-        bb.order(ByteOrder.BIG_ENDIAN);
-        bb.put(one);
-        bb.put(two);
-        short shortVal = bb.getShort(0);
+        ByteBuffer buffer = ByteBuffer.allocate(2);
+        buffer.order(ByteOrder.BIG_ENDIAN);
+        buffer.put(a);
+        buffer.put(b);
+        short shortVal = buffer.getShort(0);
         return shortVal;
     }
-    /**
-     * Return the number of cache misses.
-     * @return cache misses
-     */
-    public int getCacheMisses() {
-        return cacheMisses;
-    }
-    /**
-     * Return the nuber of cache hits.
-     * @return the number of cache hits
-     */
-    public int getCacheHits() {
-        return cacheHits;
-    }
-    /**
-     * Return the number of disk reads.
-     * @return disk reads
-     */
-    public int getDiskReads() {
-        return diskReads;
-    }
-    /**
-     * Return the number of disk writes
-     * @return disk writes
-     */
-    public int getDiskWrites() {
-        return diskWrites;
-    }
+    
+    
+    
 
 }
